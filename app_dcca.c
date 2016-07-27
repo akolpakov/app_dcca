@@ -11,6 +11,8 @@ static struct {
         struct dict_object * CC_Total_Octets;
         //struct dict_object * Volume_Quota_Threshold;
         struct dict_object * Validity_Time;
+        struct dict_object * Result_Code;
+        struct dict_object * Rating_Group;
 } dcca_dict;
 
 int dcca_cb_read( struct msg ** msg, struct dict_object * avp, struct avp_hdr ** avp_dst )
@@ -60,7 +62,7 @@ static int dcca_cb( struct msg ** msg, struct avp * avp, struct session * sess, 
         struct msg * m;
         struct avp_hdr * art1 = NULL, * art2 = NULL, * art3 = NULL, * art4 = NULL, * art5 = NULL;
         struct avp *groupedavp = NULL, *groupedavp2 = NULL;
-        union avp_value validity_time, total_octets;
+        union avp_value validity_time, total_octets, result_code, rating_group;
 
         LOG_N("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! CB");
 
@@ -74,7 +76,7 @@ static int dcca_cb( struct msg ** msg, struct avp * avp, struct session * sess, 
         CHECK_FCT( dcca_cb_read(msg, dcca_dict.Auth_Application_Id, &art1) );
         CHECK_FCT( dcca_cb_read(msg, dcca_dict.CC_Request_Type, &art2) );
         CHECK_FCT( dcca_cb_read(msg, dcca_dict.CC_Request_Number, &art3) );
-        CHECK_FCT( dcca_cb_read(msg, dcca_dict.Origin_State_Id, &art4) );
+        //CHECK_FCT( dcca_cb_read(msg, dcca_dict.Origin_State_Id, &art4) );
         CHECK_FCT( dcca_cb_read(msg, dcca_dict.Event_Timestamp, &art5) );
 
 
@@ -91,19 +93,36 @@ static int dcca_cb( struct msg ** msg, struct avp * avp, struct session * sess, 
         CHECK_FCT( dcca_cb_put(m, dcca_dict.Auth_Application_Id, art1) );
         CHECK_FCT( dcca_cb_put(m, dcca_dict.CC_Request_Type, art2) );
         CHECK_FCT( dcca_cb_put(m, dcca_dict.CC_Request_Number, art3) );
-        CHECK_FCT( dcca_cb_put(m, dcca_dict.Origin_State_Id, art4) );
-        CHECK_FCT( dcca_cb_put(m, dcca_dict.Event_Timestamp, art5) );
+        //CHECK_FCT( dcca_cb_put(m, dcca_dict.Origin_State_Id, art4) );
+        //CHECK_FCT( dcca_cb_put(m, dcca_dict.Event_Timestamp, art5) );
 
-        validity_time.i32 = 60;
-        CHECK_FCT( dcca_cb_put_value(m, dcca_dict.Validity_Time, &validity_time) );
-
-        // Group
+        // Multiple Services CC Group
 
         total_octets.i64 = 1024*1024;
         CHECK_FCT( fd_msg_avp_new ( dcca_dict.Multiple_Services_Credit_Control, 0, &groupedavp ) );
+
+        // Granted Service Unit
+
         CHECK_FCT( fd_msg_avp_new ( dcca_dict.Granted_Service_Unit, 0, &groupedavp2 ) );
         CHECK_FCT( dcca_cb_put_value_to_avp(groupedavp2, dcca_dict.CC_Total_Octets, &total_octets) );
         CHECK_FCT( fd_msg_avp_add( groupedavp, MSG_BRW_LAST_CHILD, groupedavp2 ) );
+
+        // Result code
+
+        result_code.i32 = 2001;
+        CHECK_FCT( dcca_cb_put_value_to_avp(groupedavp, dcca_dict.Result_Code, &result_code) );
+
+        // Rating group
+
+        rating_group.i32 = 1001;
+        CHECK_FCT( dcca_cb_put_value_to_avp(groupedavp, dcca_dict.Rating_Group, &rating_group) );
+
+        // Validity Time
+
+        validity_time.i32 = 60;
+        CHECK_FCT( dcca_cb_put_value_to_avp(groupedavp, dcca_dict.Validity_Time, &validity_time) );
+
+
         CHECK_FCT( fd_msg_avp_add( m, MSG_BRW_LAST_CHILD, groupedavp ) );
 
         /* Send the answer */
@@ -129,6 +148,8 @@ static int dcca_entry(char * conffile)
         CHECK_FCT( fd_dict_search( fd_g_config->cnf_dict, DICT_AVP, AVP_BY_NAME, "CC-Total-Octets", &dcca_dict.CC_Total_Octets, ENOENT) );
         //CHECK_FCT( fd_dict_search( fd_g_config->cnf_dict, DICT_AVP, AVP_BY_NAME, "External-Identifier", &dcca_dict.Volume_Quota_Threshold, ENOENT) );
         CHECK_FCT( fd_dict_search( fd_g_config->cnf_dict, DICT_AVP, AVP_BY_NAME, "Validity-Time", &dcca_dict.Validity_Time, ENOENT) );
+        CHECK_FCT( fd_dict_search( fd_g_config->cnf_dict, DICT_AVP, AVP_BY_NAME, "Result-Code", &dcca_dict.Result_Code, ENOENT) );
+        CHECK_FCT( fd_dict_search( fd_g_config->cnf_dict, DICT_AVP, AVP_BY_NAME, "Rating-Group", &dcca_dict.Rating_Group, ENOENT) );
 
         /* Register the dispatch callbacks */
         memset(&data, 0, sizeof(data));
