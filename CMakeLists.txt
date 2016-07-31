@@ -2,7 +2,7 @@
 PROJECT("Diameter Credit Control Application" C)
 
 # Compile as a module
-FD_ADD_EXTENSION(app_dcca app_dcca.h app_dcca.c)
+FD_ADD_EXTENSION(app_dcca app_dcca.h app_dcca.c parson.h parson.c)
 
 ####
 ## INSTALL section ##
