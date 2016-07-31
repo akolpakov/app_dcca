@@ -12,6 +12,12 @@ static struct {
     struct dict_object * Validity_Time;
     struct dict_object * Result_Code;
     struct dict_object * Rating_Group;
+    struct dict_object * Used_Service_Unit;
+    struct dict_object * CC_Input_Octets;
+    struct dict_object * CC_Output_Octets;
+    struct dict_object * Subscription_Id;
+    struct dict_object * Subscription_Id_Type;
+    struct dict_object * Subscription_Id_Data;
 } dcca_dict;
 
 int dcca_cb_read( struct msg ** msg, struct dict_object * avp, struct avp_hdr ** avp_dst )
@@ -108,15 +114,92 @@ int dcca_cb_put(struct msg * msg, struct dict_object * avp, struct avp_hdr * avp
 //}
 
 
+int avp_search_child ( struct avp * msg, struct dict_object * what, struct avp ** avp )
+{
+	struct avp * nextavp;
+	struct dict_avp_data 	dictdata;
+	struct avp_hdr *avp_dst;
+
+	TRACE_ENTRY("%p %p %p", msg, what, avp);
+
+	*avp = NULL;
+
+	CHECK_FCT(  fd_dict_getval(what, &dictdata)  );
+
+	/* Loop on all top AVPs */
+	CHECK_FCT(  fd_msg_browse(msg, MSG_BRW_FIRST_CHILD, (void *)&nextavp, NULL)  );
+	while (nextavp) {
+	    CHECK_FCT( fd_msg_avp_hdr( nextavp, &avp_dst )  );
+
+		if ( (avp_dst->avp_code == dictdata.avp_code) && (avp_dst->avp_vendor == dictdata.avp_vendor) ) {
+		    break;
+		}
+
+		/* Otherwise move to next AVP in the message */
+		CHECK_FCT( fd_msg_browse(nextavp, MSG_BRW_NEXT, (void *)&nextavp, NULL) );
+	}
+
+	if (avp)
+		*avp = nextavp;
+
+	if (avp && nextavp) {
+		struct dictionary * dict;
+		CHECK_FCT( fd_dict_getdict( what, &dict) );
+		CHECK_FCT_DO( fd_msg_parse_dict( nextavp, dict, NULL ), /* nothing */ );
+	}
+
+	if (avp || nextavp)
+		return 0;
+	else
+		return ENOENT;
+}
+
+int get_imsi(struct msg * msg, struct avp ** avp)
+{
+    struct avp * nextavp = NULL, * a = NULL;
+    struct avp_hdr * a_hdr = NULL;
+    struct dict_avp_data dictdata;
+	struct avp_hdr *avp_dst;
+
+	*avp = NULL;
+
+	CHECK_FCT(  fd_dict_getval(dcca_dict.Subscription_Id, &dictdata)  );
+
+    CHECK_FCT(  fd_msg_browse(msg, MSG_BRW_FIRST_CHILD, (void *)&nextavp, NULL)  );
+	while (nextavp) {
+	    CHECK_FCT( fd_msg_avp_hdr( nextavp, &avp_dst )  );
+
+		if ( (avp_dst->avp_code == dictdata.avp_code) && (avp_dst->avp_vendor == dictdata.avp_vendor) ) {
+		    CHECK_FCT( avp_search_child ( nextavp, dcca_dict.Subscription_Id_Type, &a) );
+		    if(a) {
+		        CHECK_FCT( fd_msg_avp_hdr( a, &a_hdr )  );
+		        if(a_hdr->avp_value->i32 == 1) {
+		            CHECK_FCT( avp_search_child ( nextavp, dcca_dict.Subscription_Id_Data, avp) );
+		            break;
+		        }
+		    }
+		}
+
+		/* Otherwise move to next AVP in the message */
+		CHECK_FCT( fd_msg_browse(nextavp, MSG_BRW_NEXT, (void *)&nextavp, NULL) );
+	}
+
+	return 0;
+
+}
+
 
 // Processing application request. Called each Credit-Control-Request
 
 static int dcca_cb( struct msg ** msg, struct avp * avp, struct session * sess, void * opaque, enum disp_action * act)
 {
     struct msg * m;
-    struct avp_hdr * art1 = NULL, * art2 = NULL, * art3 = NULL, * art4 = NULL, * art5 = NULL;
+    struct avp_hdr * val_app_id = NULL, * val_rt = NULL, * val_rn = NULL, * val_io = NULL, * val_oo = NULL, *val_imsi = NULL;
     struct avp *groupedavp = NULL, *groupedavp2 = NULL;
     union avp_value validity_time, total_octets, result_code, rating_group;
+    struct avp * a = NULL, * aa = NULL;
+    int input_octets = 0, output_octets = 0;
+    char* imsi = NULL;
 
     LOG_N("CCR processor");
 
@@ -132,11 +215,46 @@ static int dcca_cb( struct msg ** msg, struct avp * avp, struct session * sess, 
 
     // Read AVPs
 
-    CHECK_FCT( dcca_cb_read(msg, dcca_dict.Auth_Application_Id, &art1) );
-    CHECK_FCT( dcca_cb_read(msg, dcca_dict.CC_Request_Type, &art2) );
-    CHECK_FCT( dcca_cb_read(msg, dcca_dict.CC_Request_Number, &art3) );
-    CHECK_FCT( dcca_cb_read(msg, dcca_dict.Event_Timestamp, &art5) );
+    CHECK_FCT( dcca_cb_read(msg, dcca_dict.Auth_Application_Id, &val_app_id) );
+    CHECK_FCT( dcca_cb_read(msg, dcca_dict.CC_Request_Type, &val_rt) );
+    CHECK_FCT( dcca_cb_read(msg, dcca_dict.CC_Request_Number, &val_rn) );
 
+    // Read IMSI
+
+    CHECK_FCT( get_imsi(*msg, &a) );
+    if (a) {
+        CHECK_FCT( fd_msg_avp_hdr( a, &val_imsi )  );
+        int len = val_imsi->avp_value->os.len;
+        imsi = malloc(len * sizeof(char));
+
+        for (int i = 0; i < len; i++) {
+            imsi[i] = val_imsi->avp_value->os.data[i];
+        }
+        imsi[len] = 0;
+    }
+
+    // Read Input / Output Octets
+
+    CHECK_FCT( fd_msg_search_avp ( *msg, dcca_dict.Multiple_Services_Credit_Control, &a) );
+    if (a) {
+        CHECK_FCT( avp_search_child ( a, dcca_dict.Used_Service_Unit, &a) );
+        if (a) {
+            CHECK_FCT( avp_search_child ( a, dcca_dict.CC_Input_Octets, &aa) );
+            if (aa) {
+                CHECK_FCT( fd_msg_avp_hdr( aa, &val_io )  );
+                input_octets = val_io->avp_value->i32;
+            }
+            CHECK_FCT( avp_search_child ( a, dcca_dict.CC_Output_Octets, &aa) );
+            if (aa) {
+                CHECK_FCT( fd_msg_avp_hdr( aa, &val_oo )  );
+                output_octets = val_oo->avp_value->i32;
+            }
+        }
+    }
+
+    LOG_N("IMSI: %s", imsi);
+    LOG_N("IN: %i", input_octets);
+    LOG_N("OUT: %i", output_octets);
 
     // Create response message
 
@@ -146,13 +264,13 @@ static int dcca_cb( struct msg ** msg, struct avp * avp, struct session * sess, 
 
     // Put params to response
 
-    CHECK_FCT( dcca_cb_put(m, dcca_dict.Auth_Application_Id, art1) );
-    CHECK_FCT( dcca_cb_put(m, dcca_dict.CC_Request_Type, art2) );
-    CHECK_FCT( dcca_cb_put(m, dcca_dict.CC_Request_Number, art3) );
+    CHECK_FCT( dcca_cb_put(m, dcca_dict.Auth_Application_Id, val_app_id) );
+    CHECK_FCT( dcca_cb_put(m, dcca_dict.CC_Request_Type, val_rt) );
+    CHECK_FCT( dcca_cb_put(m, dcca_dict.CC_Request_Number, val_rn) );
 
     // Multiple Services CC Group
 
-    total_octets.i64 = rest_api_vsca("234206210071342", 100, 200);;
+    total_octets.i64 = rest_api_vsca(imsi, input_octets, output_octets);
     CHECK_FCT( fd_msg_avp_new ( dcca_dict.Multiple_Services_Credit_Control, 0, &groupedavp ) );
 
     // Granted Service Unit
@@ -207,6 +325,12 @@ static int dcca_entry(char * conffile)
     CHECK_FCT( fd_dict_search( fd_g_config->cnf_dict, DICT_AVP, AVP_BY_NAME, "Validity-Time", &dcca_dict.Validity_Time, ENOENT) );
     CHECK_FCT( fd_dict_search( fd_g_config->cnf_dict, DICT_AVP, AVP_BY_NAME, "Result-Code", &dcca_dict.Result_Code, ENOENT) );
     CHECK_FCT( fd_dict_search( fd_g_config->cnf_dict, DICT_AVP, AVP_BY_NAME, "Rating-Group", &dcca_dict.Rating_Group, ENOENT) );
+    CHECK_FCT( fd_dict_search( fd_g_config->cnf_dict, DICT_AVP, AVP_BY_NAME, "Used-Service-Unit", &dcca_dict.Used_Service_Unit, ENOENT) );
+    CHECK_FCT( fd_dict_search( fd_g_config->cnf_dict, DICT_AVP, AVP_BY_NAME, "CC-Input-Octets", &dcca_dict.CC_Input_Octets, ENOENT) );
+    CHECK_FCT( fd_dict_search( fd_g_config->cnf_dict, DICT_AVP, AVP_BY_NAME, "CC-Output-Octets", &dcca_dict.CC_Output_Octets, ENOENT) );
+    CHECK_FCT( fd_dict_search( fd_g_config->cnf_dict, DICT_AVP, AVP_BY_NAME, "Subscription-Id", &dcca_dict.Subscription_Id, ENOENT) );
+    CHECK_FCT( fd_dict_search( fd_g_config->cnf_dict, DICT_AVP, AVP_BY_NAME, "Subscription-Id-Type", &dcca_dict.Subscription_Id_Type, ENOENT) );
+    CHECK_FCT( fd_dict_search( fd_g_config->cnf_dict, DICT_AVP, AVP_BY_NAME, "Subscription-Id-Data", &dcca_dict.Subscription_Id_Data, ENOENT) );
 
     // Register the dispatch callbacks
 
