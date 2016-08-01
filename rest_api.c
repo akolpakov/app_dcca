@@ -61,6 +61,10 @@ int rest_api_vsca(const char *imsi, int bytes_in, int bytes_out)
 		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
     	curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
 
+		// TODO: verify sertificate
+    	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+    	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+
     	// call rest api
 
 		return_code = curl_easy_perform(curl);

@@ -227,7 +227,8 @@ static int dcca_cb( struct msg ** msg, struct avp * avp, struct session * sess, 
         int len = val_imsi->avp_value->os.len;
         imsi = malloc(len * sizeof(char));
 
-        for (int i = 0; i < len; i++) {
+        int i;
+        for (i = 0; i < len; i++) {
             imsi[i] = val_imsi->avp_value->os.data[i];
         }
         imsi[len] = 0;
